@@ -2,7 +2,7 @@
 set -euo pipefail
 
 here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-pkgdir="${here}/packaging/bin"
+pkgdir="${here}/packaging"
 
 pause() {
   if [ -t 0 ]; then
@@ -19,14 +19,16 @@ echo "  cd ${pkgdir}"
 echo "  makepkg -si"
 echo "  sudo systemctl enable --now alienwarectl.service"
 echo
-echo "makepkg builds a package from the published release."
+echo "makepkg builds the committed plugin checkout and the pinned backend sources."
+echo "Checkout: $(git -C "$here" rev-parse --short HEAD)"
+echo "No existing fan service will be disabled automatically."
 echo "pacman and systemctl will ask for your password."
 echo
 
 if [ ! -d "${pkgdir}" ]; then
   echo "Cannot find ${pkgdir}"
   echo "Install the plugin first:"
-  echo "  omarchy plugin add https://github.com/chr0nzz/omarchy-alienware.git --enable"
+  echo "  omarchy plugin add https://github.com/CommanderTurtle/omarchy-alienware.git --enable"
   exit 1
 fi
 
@@ -37,6 +39,7 @@ fi
 
 cd "${pkgdir}"
 makepkg -si
+bash "${here}/scripts/check-controllers.sh"
 sudo systemctl enable --now alienwarectl.service
 
 echo

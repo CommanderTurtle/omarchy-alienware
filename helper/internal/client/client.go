@@ -1,8 +1,10 @@
 package client
 
 import (
+	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/godbus/dbus/v5"
 
@@ -97,6 +99,16 @@ func (c *Client) call(method string, args ...any) *dbus.Call {
 func (c *Client) Status() (string, error) {
 	var out string
 	if err := c.call("Status").Store(&out); err != nil {
+		return "", MapDBusError(err)
+	}
+	return out, nil
+}
+
+func (c *Client) LightingRequest(payload string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	var out string
+	if err := c.obj.CallWithContext(ctx, daemon.Interface+".LightingRequest", 0, payload).Store(&out); err != nil {
 		return "", MapDBusError(err)
 	}
 	return out, nil

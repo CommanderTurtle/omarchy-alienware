@@ -115,10 +115,18 @@ func (r *Reader) forceGmodePath() string {
 }
 
 func (r *Reader) ReadProfile() (string, error) {
+	if r.Backend != nil {
+		result, err := r.backendStatus()
+		return result.Profile.Current, err
+	}
 	return readTrimmed(r.profilePath())
 }
 
 func (r *Reader) ReadProfileChoices() ([]string, error) {
+	if r.Backend != nil {
+		result, err := r.backendStatus()
+		return result.Profile.Choices, err
+	}
 	s, err := readTrimmed(r.profileChoicesPath())
 	if err != nil {
 		return nil, err
@@ -157,6 +165,13 @@ func (r *Reader) noTurboPath() string {
 	return r.path("sys", "devices", "system", "cpu", "intel_pstate", "no_turbo")
 }
 
+func (r *Reader) turboPath() (string, bool) {
+	if _, err := os.Stat(r.noTurboPath()); err == nil {
+		return r.noTurboPath(), true
+	}
+	return r.path("sys/devices/system/cpu/cpufreq/boost"), false
+}
+
 func (r *Reader) cpufreqGlob() string {
 	return filepath.Join(r.path("sys", "devices", "system", "cpu"), "cpu[0-9]*", "cpufreq", "scaling_cur_freq")
 }
@@ -187,12 +202,13 @@ func (r *Reader) readCPU(w *warnings) CPU {
 }
 
 func (r *Reader) readTurbo(w *warnings) Turbo {
-	v, err := readInt(r.noTurboPath())
+	path, inverted := r.turboPath()
+	v, err := readInt(path)
 	if err != nil {
-		w.add("intel_pstate no_turbo not present")
+		w.add("CPU turbo control not present")
 		return Turbo{}
 	}
-	return Turbo{Available: true, Enabled: v == 0}
+	return Turbo{Available: true, Enabled: (inverted && v == 0) || (!inverted && v == 1)}
 }
 
 func (r *Reader) raplDir() string {
@@ -328,6 +344,21 @@ func (r *Reader) GPU() GPU {
 
 func (r *Reader) Snapshot() Snapshot {
 	w := &warnings{}
+	if r.Backend != nil {
+		data, err := r.backendStatus()
+		if err != nil {
+			return Snapshot{BackendError: err}
+		}
+		for _, warning := range data.Warnings {
+			w.add("%s", warning)
+		}
+		if r.PPDRunning != nil {
+			data.Profile.PPDRunning = r.PPDRunning()
+		}
+		return Snapshot{Model: r.Model(), Fans: data.Fans, Temps: data.Temps, Profile: data.Profile,
+			Backend: BackendInfo{Name: data.Backend, SupportedModel: data.SupportedModel, CurveSupported: data.CurveSupported},
+			Turbo:   r.readTurbo(w), Power: r.readPower(w), CPU: r.readCPU(w), GPU: r.readGPU(w), Warnings: w.result()}
+	}
 	alienware, err := r.FindHwmon(AlienwareHwmonName)
 	if err != nil {
 		alienware = ""
@@ -353,6 +384,13 @@ func (r *Reader) Snapshot() Snapshot {
 }
 
 func (r *Reader) Temps() (map[string]int, []string) {
+	if r.Backend != nil {
+		data, err := r.backendStatus()
+		if err != nil {
+			return map[string]int{}, []string{err.Error()}
+		}
+		return data.Temps, data.Warnings
+	}
 	w := &warnings{}
 	alienware, err := r.FindHwmon(AlienwareHwmonName)
 	if err != nil {

@@ -18,6 +18,9 @@ type KeyboardStatus struct {
 }
 
 func (s *Service) KeyboardStatus() (string, *dbus.Error) {
+	if s.reader.Backend != nil {
+		return s.sdkKeyboard(map[string]any{"action": "status"})
+	}
 	out := KeyboardStatus{OK: true, Present: s.keyboardPresent()}
 	if out.Present {
 		out.KeyCount = kbd.KeyCount()
@@ -88,6 +91,14 @@ func (s *Service) SetKeyboardKeys(payload string, sender dbus.Sender) *dbus.Erro
 	if err != nil {
 		return dbusError(ErrNameBadRequest, err.Error())
 	}
+	if s.reader.Backend != nil {
+		colors := map[string]string{}
+		for _, entry := range entries {
+			colors[strconv.Itoa(int(entry.Index))] = fmt.Sprintf("%02x%02x%02x", entry.R, entry.G, entry.B)
+		}
+		_, err := s.sdkKeyboard(map[string]any{"action": "set-map", "colors": colors})
+		return err
+	}
 	return mapError(s.applyKeyboard(func(dev *kbd.Device) error {
 		return dev.SetKeyColors(entries)
 	}))
@@ -101,6 +112,10 @@ func (s *Service) SetKeyboardAll(color string, sender dbus.Sender) *dbus.Error {
 	if err != nil {
 		return dbusError(ErrNameBadRequest, err.Error())
 	}
+	if s.reader.Backend != nil {
+		_, err := s.sdkKeyboard(map[string]any{"action": "set-all", "color": fmt.Sprintf("%02x%02x%02x", r, g, b)})
+		return err
+	}
 	return mapError(s.applyKeyboard(func(dev *kbd.Device) error {
 		return dev.SetAllKeys(r, g, b, kbd.DefaultKeyFirst, kbd.DefaultKeyLast)
 	}))
@@ -110,9 +125,22 @@ func (s *Service) KeyboardOff(sender dbus.Sender) *dbus.Error {
 	if err := s.auth.Authorize(sender, ActionSetKeyboard); err != nil {
 		return mapError(err)
 	}
+	if s.reader.Backend != nil {
+		_, err := s.sdkKeyboard(map[string]any{"action": "off"})
+		return err
+	}
 	return mapError(s.applyKeyboard(func(dev *kbd.Device) error {
 		return dev.SetAllKeys(0, 0, 0, kbd.DefaultKeyFirst, kbd.DefaultKeyLast)
 	}))
+}
+
+func (s *Service) sdkKeyboard(request map[string]any) (string, *dbus.Error) {
+	request["section"] = "kbd"
+	out, err := s.reader.Backend.Call(request)
+	if err != nil {
+		return "", mapError(err)
+	}
+	return string(out), nil
 }
 
 func parseHexColor6(s string) (uint8, uint8, uint8, error) {

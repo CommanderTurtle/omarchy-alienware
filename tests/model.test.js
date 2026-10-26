@@ -136,9 +136,9 @@ test("normalizeStatus keeps the two fans and derives percent and stopped", () =>
   assert.equal(s.fansAvailable, true)
 })
 
-test("normalizeStatus drops extra fans reported by the helper", () => {
+test("normalizeStatus preserves additional fans discovered by the backend", () => {
   const s = status({ fans: GOOD_STATUS.fans.concat([{ id: "fan3", rpm: 10, max: 100 }]) })
-  assert.equal(s.fans.length, 2)
+  assert.equal(s.fans.length, 3)
 })
 
 test("normalizeStatus computes percent when the helper omits it", () => {
@@ -268,9 +268,9 @@ test("nextProfile cycles both directions and tolerates an unknown current", () =
   assert.equal(Model.nextProfile([], "balanced"), "balanced")
 })
 
-test("profileChoices falls back to the documented list", () => {
+test("profileChoices never invents unsupported firmware profiles", () => {
   assert.equal(Model.profileChoices(status()).length, 6)
-  assert.equal(Model.profileChoices(Model.normalizeStatus(null)).length, 6)
+  assert.equal(Model.profileChoices(Model.normalizeStatus(null)).length, 0)
 })
 
 test("profileWarning flags ppd and read only profiles", () => {
@@ -1648,11 +1648,11 @@ test("selectionSummary names what Apply will paint", () => {
   assert.equal(Model.selectionSummary(0, ["logo", "ring-top"]), "2 regions")
 })
 
-test("batterySync persists and defaults on", () => {
-  assert.equal(Model.parseState("").batterySync, true)
+test("batterySync persists and requires explicit opt-in", () => {
+  assert.equal(Model.parseState("").batterySync, false)
   assert.equal(Model.parseState(JSON.stringify({ batterySync: false })).batterySync, false)
   assert.equal(Model.buildStatePayload({ batterySync: false }).batterySync, false)
-  assert.equal(Model.buildStatePayload({}).batterySync, true)
+  assert.equal(Model.buildStatePayload({}).batterySync, false)
 })
 
 test("colour presets are valid hex", () => {

@@ -5,134 +5,35 @@ on:
     tags: ['v*']
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build:
-    name: Build and publish
+  checks:
+    uses: ./.github/workflows/test.yml
+
+  source:
+    name: Publish complete source
+    needs: checks
     runs-on: ubuntu-latest
-    env:
-      HAS_MARKETPLACE_TOKEN: ${{ secrets.MARKETPLACE_TOKEN != '' }}
-      MARKETPLACE_LISTED: ${{ vars.MARKETPLACE_LISTED == 'true' }}
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-
-      - name: Check the tag matches every version string
+      - name: Check release tag
         run: |
-          tag="${GITHUB_REF_NAME#v}"
-          manifest=$(python3 -c "import json;print(json.load(open('manifest.json'))['version'])")
-          pkg=$(python3 -c "import json;print(json.load(open('package.json'))['version'])")
-          helper=$(sed -n 's/^var Version = "\(.*\)"$/\1/p' helper/internal/cli/cli.go)
-          makepkg=$(sed -n 's/^pkgver=//p' packaging/PKGBUILD)
-          fail=0
-          for pair in "manifest.json:$manifest" "package.json:$pkg" "cli.go:$helper" "packaging/PKGBUILD:$makepkg"; do
-            name="${pair%%:*}"
-            value="${pair#*:}"
-            if [ "$value" != "$tag" ]; then
-              echo "$name says $value but the tag is $tag"
-              fail=1
-            fi
-          done
-          test "$fail" -eq 0
-
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
-        with:
-          go-version-file: helper/go.mod
-          cache-dependency-path: helper/go.sum
-
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: 22
-
-      - name: Verify before releasing
+          version=$(python3 -c "import json;print(json.load(open('manifest.json'))['version'])")
+          test "$GITHUB_REF_NAME" = "v${version}"
+          test -f "release-notes/${GITHUB_REF_NAME}.md"
+      - name: Archive the complete committed source
         run: |
-          npm test
-          cd helper
-          gofmt -l . | tee /tmp/unformatted
-          test ! -s /tmp/unformatted
-          go vet ./...
-          go test -race ./...
-
-      - name: Resolve version
-        id: version
-        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
-      - name: Build alienwarectl
-        env:
-          CGO_ENABLED: 0
-          GOOS: linux
-          GOARCH: amd64
-        run: |
-          cd helper
-          go build \
-            -trimpath \
-            -ldflags "-s -w -X github.com/chr0nzz/omarchy-alienware/helper/internal/cli.Version=${{ steps.version.outputs.value }}" \
-            -o "${GITHUB_WORKSPACE}/alienwarectl" \
-            ./cmd/alienwarectl
-
-      - name: Check the binary is static and reports its version
-        run: |
-          file alienwarectl
-          if ldd alienwarectl 2>&1 | grep -qv "not a dynamic executable"; then
-            echo "binary is dynamically linked, it must be static"
-            exit 1
-          fi
-          ./alienwarectl version
-
-      - name: Package
-        run: |
-          version="${{ steps.version.outputs.value }}"
-          dir="alienwarectl-${version}-x86_64"
-          mkdir -p "$dir"
-          cp alienwarectl README.md LICENSE "$dir/"
-          cp -r docs "$dir/docs"
-          cp -r packaging "$dir/packaging"
-          tar -czf "${dir}.tar.gz" "$dir"
-          sha256sum "${dir}.tar.gz" alienwarectl > sha256sums.txt
-          cat sha256sums.txt
-
-      - name: Check a release note exists
-        run: test -f "release-notes/${GITHUB_REF_NAME}.md"
-
-      - name: Publish release
+          name="omarchy-alienware-${GITHUB_REF_NAME}"
+          git archive --format=tar --prefix="${name}/" HEAD | gzip -n > "${name}.tar.gz"
+          sha256sum "${name}.tar.gz" > sha256sums.txt
+      - name: Publish source release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          version="${{ steps.version.outputs.value }}"
-          notes="release-notes/v${version}.md"
-          if [ -f "$notes" ]; then
-            gh release create "$GITHUB_REF_NAME" \
-              --title "v${version}" \
-              --notes-file "$notes" \
-              alienwarectl "alienwarectl-${version}-x86_64.tar.gz" sha256sums.txt
-          else
-            gh release create "$GITHUB_REF_NAME" \
-              --title "v${version}" \
-              --generate-notes \
-              alienwarectl "alienwarectl-${version}-x86_64.tar.gz" sha256sums.txt
-          fi
-
-      - name: Say why the marketplace step was skipped
-        if: env.MARKETPLACE_LISTED != 'true'
-        run: |
-          echo "Skipping the marketplace verification issue."
-          echo "The verify form only accepts a plugin that is already listed."
-          echo "Submit once through the submit-plugin form, then set the repository"
-          echo "variable MARKETPLACE_LISTED to true so future tags open a verify issue."
-
-      - name: Open the marketplace verification issue
-        if: env.HAS_MARKETPLACE_TOKEN == 'true' && env.MARKETPLACE_LISTED == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.MARKETPLACE_TOKEN }}
-        run: |
-          sha=$(git rev-parse "${GITHUB_REF_NAME}^{commit}")
-          body=$(printf '%s\n' \
-            "### Verification action" "" "Verify and publish a newer upstream commit" "" \
-            "### Plugin ID" "" "xyzlab.alienware" "" \
-            "### Repository URL" "" "https://github.com/${GITHUB_REPOSITORY}" "" \
-            "### Target commit" "" "$sha" "" \
-            "### Verification acknowledgment" "" \
-            "- [x] I understand that only the exact target commit can become a verified marketplace snapshot and that verification is not a security audit." "" \
-            "### Standard installation acknowledgment" "" \
-            "- [ ] I confirm that this listed root plugin supports the standard Omarchy installation path and does not require manual setup.")
-          gh issue create -R omacom/omarchy-plugin-marketplace --title "[Verify]: Alienware ${GITHUB_REF_NAME}" --body "$body"
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --notes-file "release-notes/${GITHUB_REF_NAME}.md" \
+            "omarchy-alienware-${GITHUB_REF_NAME}.tar.gz" sha256sums.txt

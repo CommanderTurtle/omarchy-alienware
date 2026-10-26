@@ -87,6 +87,8 @@ Item {
   property bool rgbLoaded: false
   property bool rgbRefreshPending: false
   property string rgbError: ""
+  readonly property var lightingDevices: Model.toList(rgb.devices)
+  readonly property bool mappedChassis: rgbConnected && status.model === "Alienware x15 R2" && Model.hasLegacyChassis(lightingDevices)
   readonly property bool rgbConnected: rgb.device.ready && rgbError === ""
   readonly property var regions: rgb.regions
 
@@ -100,6 +102,7 @@ Item {
 
   property var keyColors: ({})
   property var keyOn: ({})
+  property var deviceColors: ({})
 
   property string color: ""
   property int brightness: 100
@@ -112,16 +115,17 @@ Item {
   property var curveGpu: Model.defaultCurve()
 
   property bool stateLoaded: false
+  property bool stateHasLighting: false
   property bool lightsRestored: false
   property int rgbRestoreTries: 0
   property bool keyboardRestored: false
   property int kbdRestoreTries: 0
   property string profileBeforeSleep: ""
-  property bool muteSync: true
+  readonly property bool muteSync: Model.boolOr(setting("muteSync", false), false)
   property string muteColor: "FF0000"
   property bool sinkMuted: false
   property bool sourceMuted: false
-  property bool batterySync: true
+  property bool batterySync: false
   property var battery: ({ percent: -1, charging: false, ok: false })
   property int profileRestoreTries: 0
   property double resumeAt: 0
@@ -162,6 +166,8 @@ Item {
 
   function applyState(raw) {
     var parsed = Model.parseState(raw)
+    stateHasLighting = Model.hasLightingState(parsed)
+    deviceColors = parsed.devices
     regionColors = parsed.regions
     regionOn = parsed.regionsOn
     keyColors = parsed.keys
@@ -169,8 +175,10 @@ Item {
     color = parsed.color
     brightness = parsed.brightness
     lightsOn = parsed.lightsOn
-    themeSync = parsed.themeSync === undefined ? themeRgb === true : parsed.themeSync === true
-    batterySync = parsed.batterySync !== false
+    var saved = Model.parseJson(raw)
+    themeSync = saved && saved.themeSync !== undefined ? parsed.themeSync === true : themeRgb === true
+    stateHasLighting = stateHasLighting || themeSync
+    batterySync = parsed.batterySync === true
     curveInterval = parsed.curve.interval
     curveHysteresis = parsed.curve.hysteresis
     curveCpu = parsed.curve.cpu
@@ -205,7 +213,7 @@ Item {
     id: installProc
     onExited: function(exitCode) {
       if (exitCode !== 0) {
-        root.reportAction(false, "No terminal found, run packaging/bin/makepkg -si by hand")
+        root.reportAction(false, "No terminal found, run bash scripts/install-helper.sh from the plugin checkout")
       }
     }
   }
@@ -222,6 +230,7 @@ Item {
     if (!dirReady) { saveTimer.restart(); return }
     stateFile.setText(JSON.stringify(Model.buildStatePayload({
       savedAt: Date.now(),
+      devices: deviceColors,
       regions: regionColors,
       regionsOn: regionOn,
       keys: keyColors,
@@ -306,6 +315,7 @@ Item {
 
   function pushChassis(label) {
     if (!lightsOn) return false
+    if (!mappedChassis) return pushDevices(color || themeHex || "8080FF", label)
     var map = root.rgbOverlay(Model.effectiveRegionColors(regionColors, regionOn))
     if (!Model.hasAnyKey(map)) return false
     enqueue(Model.cmdRgbSetMap(map), String(label || "Colour"))
@@ -434,6 +444,9 @@ Item {
           root.lightsRestored = true
           root.restoreSavedLights()
         }
+      } else if (result.code === "device-busy") {
+        root.rgbRefreshPending = true
+        elcRetry.restart()
       } else {
         root.rgbError = result.error
         root.rgbLoaded = true
@@ -487,7 +500,7 @@ Item {
           root.restoreSavedKeyboard()
           root.readMuteState()
         }
-      } else {
+      } else if (result.code !== "device-busy") {
         root.kbdError = result.error
         root.kbdLoaded = true
       }
@@ -613,6 +626,10 @@ Item {
   }
 
   function applyCurve() {
+    if (!status.backend.curveSupported) {
+      reportAction(false, "Additive curves require writable kernel fan controls and identified CPU/GPU sensors")
+      return false
+    }
     var payload = Model.buildCurvePayload(curveInterval, curveHysteresis, curveCpu, curveGpu)
     var check = Model.validateCurve(payload)
     if (!check.ok) {
@@ -777,9 +794,10 @@ Item {
   }
 
   function setBrightness(value) {
+    if (!rgb.device.brightnessSupported) return reportAction(false, "Standalone brightness is unavailable on this controller")
     brightness = Model.clampBrightness(value)
     if (brightness > 0) lightsOn = true
-    enqueue(Model.cmdRgbBrightness(brightness), "Brightness")
+    if (rgb.device.brightnessSupported) enqueue(Model.cmdRgbBrightness(brightness), "Brightness")
     scheduleSave()
     return true
   }
@@ -804,7 +822,8 @@ Item {
 
   function restoreLights() {
     lightsOn = true
-    enqueue(Model.cmdRgbBrightness(brightness), "Brightness")
+    if (!mappedChassis) { pushDevices(themeSync ? themeHex : color || "8080FF", "Lighting"); scheduleSave(); return true }
+    if (rgb.device.brightnessSupported) enqueue(Model.cmdRgbBrightness(brightness), "Brightness")
     var map = Model.effectiveRegionColors(regionColors, regionOn)
     if (Model.hasAnyKey(map)) enqueue(Model.cmdRgbSetMap(root.rgbOverlay(map)), "Colour")
     if (kbdPresent) {
@@ -820,9 +839,17 @@ Item {
   }
 
   function restoreSavedLights() {
+    if (!stateHasLighting) return false
     if (lightsOn !== true) return reapplyLightsOff()
-    enqueue(Model.cmdRgbBrightness(brightness), "Brightness")
-    return pushChassis("Colour")
+    if (rgb.device.brightnessSupported) enqueue(Model.cmdRgbBrightness(brightness), "Brightness")
+    if (mappedChassis) return pushChassis("Colour")
+    if (themeSync) return pushDevices(themeHex, "Theme colour")
+    for (var i = 0; i < lightingDevices.length; i++) {
+      var device = lightingDevices[i]
+      var hex = deviceColors[device.id]
+      if (device.mapped && hex) enqueue(["alienwarectl", "backend", "color", device.id, hex], "Device colour")
+    }
+    return true
   }
 
   function identifyRegion(id) {
@@ -898,6 +925,7 @@ Item {
   }
 
   function restoreSavedKeyboard() {
+    if (!stateHasLighting) return false
     if (lightsOn !== true) {
       if (kbdPresent) enqueue(Model.cmdKbdOff(), "Keyboard off")
       return false
@@ -913,8 +941,35 @@ Item {
   }
 
   function toggleThemeSync() { return setThemeSync(!themeSync) }
+  onThemeRgbChanged: if (stateLoaded) setThemeSync(themeRgb)
+
+  function pushDevices(hex, label) {
+    var clean = Model.normalizeHex(hex)
+    if (!clean) return false
+    for (var i = 0; i < lightingDevices.length; i++) {
+      var device = lightingDevices[i]
+      if (device.mapped) enqueue(["alienwarectl", "backend", "color", device.id, clean], label || "Device colour")
+    }
+    return true
+  }
+
+  function setDeviceColor(id, hex) {
+    var clean = Model.normalizeHex(hex)
+    if (!clean) return reportAction(false, "Enter an RRGGBB color")
+    var mapped = false
+    for (var i = 0; i < lightingDevices.length; i++) if (lightingDevices[i].id === id && lightingDevices[i].mapped) mapped = true
+    if (!mapped) return reportAction(false, "Configure an unambiguous device map first")
+    var colors = Model.deviceColorPayload(deviceColors)
+    colors[id] = clean
+    deviceColors = colors
+    lightsOn = true
+    enqueue(["alienwarectl", "backend", "color", id, clean], "Device colour")
+    scheduleSave()
+    return true
+  }
 
   function setBatterySync(on) {
+    if (!mappedChassis) return reportAction(false, "Battery lighting needs a verified power-button map")
     batterySync = on === true
     if (batterySync) readBattery()
     pushChassis(batterySync ? "Battery on the power button" : "Power button colour")
@@ -927,6 +982,12 @@ Item {
   function applyThemeColor() {
     var hex = themeHex
     if (!hex) return false
+    if (!mappedChassis) {
+      color = hex
+      scheduleSave()
+      if (lightsOn) return pushDevices(hex, "Theme colour")
+      return false
+    }
     regionColors = allRegionsColorMap(hex)
     color = hex
     keyColors = Model.themeKeyColorMap(hex)
@@ -982,7 +1043,7 @@ Item {
     running: root.profileBeforeSleep !== "" && root.profileRestoreTries < 8
     onTriggered: {
       root.profileRestoreTries++
-      if (Model.shouldRestoreProfile(root.profileBeforeSleep, root.profileCurrent, root.lastGoodAt, root.resumeAt)) {
+      if (!root.status.profile.ppdRunning && Model.shouldRestoreProfile(root.profileBeforeSleep, root.profileCurrent, root.lastGoodAt, root.resumeAt)) {
         root.setProfile(root.profileBeforeSleep)
       }
       if (root.profileRestoreTries >= 8) root.profileBeforeSleep = ""
@@ -1088,6 +1149,7 @@ Item {
   Component.onCompleted: mkdirProc.running = true
 
   Component.onDestruction: {
+    if (root.curveActive) Quickshell.execDetached(Model.cmdCurveStop())
     pollTimer.stop()
     refreshSoon.stop()
     themeApply.stop()

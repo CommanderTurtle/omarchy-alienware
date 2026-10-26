@@ -1,32 +1,38 @@
 pkgname=omarchy-alienware
-pkgver=0.3.6
+pkgver=0.4.0
 pkgrel=1
 pkgdesc='Alienware fan, thermal, power and RGB control for Omarchy'
-arch=('x86_64')
-url='https://github.com/chr0nzz/omarchy-alienware'
-license=('MIT')
-depends=('dbus' 'polkit')
-makedepends=('go')
+arch=('x86_64' 'aarch64')
+url='https://github.com/CommanderTurtle/omarchy-alienware'
+license=('MIT' 'GPL-3.0-only')
+depends=('dbus' 'polkit' 'libusb' 'hidapi' 'gcc-libs')
+makedepends=('go>=1.27.3' 'gcc>=14' 'cmake>=3.24' 'ninja' 'git' 'python' 'pkgconf' 'nlohmann-json>=3.11')
+conflicts=('omarchy-alienware-bin')
 optdepends=(
   'nvidia-utils: GPU power telemetry through nvidia-smi'
   'quickshell: runs the Omarchy bar widget and panel'
+  'acpi_call-dkms: optional legacy AWCC ACPI path, requires matching kernel headers'
 )
-backup=()
+backup=('etc/omarchy-alienware/backend.json')
 options=('!lto')
-_commit=978f11f60d30f87f701e37a7011150895c2b7b0c
-source=("${pkgname}-${_commit}.tar.gz::${url}/archive/${_commit}.tar.gz")
-sha256sums=('bf6bb930eb94ab6a01bfeb738c40481a21321c9a44644c08ccc3aa13839f7eba')
+_checkout="$(cd "$startdir/.." && pwd)"
+_commit="$(git -C "$_checkout" rev-parse HEAD)"
+source=("plugin::git+file://${_checkout}#commit=${_commit}")
+sha256sums=('SKIP')
 
 install=omarchy-alienware.install
 
 prepare() {
-  cd "${srcdir}/${pkgname}-${_commit}/helper"
+  cd "${srcdir}/plugin/helper"
   export GOPATH="${srcdir}/gopath"
   go mod download
 }
 
 build() {
-  cd "${srcdir}/${pkgname}-${_commit}/helper"
+  cmake -S "${srcdir}/plugin/backend" -B "${srcdir}/backend-build" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+  cmake --build "${srcdir}/backend-build"
+  cd "${srcdir}/plugin/helper"
   export GOPATH="${srcdir}/gopath"
   export CGO_ENABLED=0
   export GOFLAGS="-trimpath -mod=readonly -modcacherw"
@@ -35,13 +41,20 @@ build() {
 }
 
 check() {
-  cd "${srcdir}/${pkgname}-${_commit}/helper"
+  ctest --test-dir "${srcdir}/backend-build" --output-on-failure
+  cd "${srcdir}/plugin/helper"
   export GOPATH="${srcdir}/gopath"
   go test ./...
 }
 
 package() {
-  cd "${srcdir}/${pkgname}-${_commit}"
+  cd "${srcdir}/plugin"
+  DESTDIR="${pkgdir}" cmake --install "${srcdir}/backend-build"
+  install -Dm755 scripts/check-controllers.sh "${pkgdir}/usr/lib/omarchy-alienware/check-controllers"
+  install -Dm644 backend/backend.example.json "${pkgdir}/etc/omarchy-alienware/backend.json"
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  install -Dm644 upstream.lock.json "${pkgdir}/usr/share/doc/${pkgname}/upstream.lock.json"
+  install -Dm644 docs/awcc.md "${pkgdir}/usr/share/doc/${pkgname}/awcc.md"
 
   install -Dm755 "${srcdir}/alienwarectl" "${pkgdir}/usr/bin/alienwarectl"
   install -Dm644 packaging/systemd/alienwarectl.service \
@@ -56,9 +69,6 @@ package() {
     "${pkgdir}/usr/share/polkit-1/actions/org.xyzlab.alienware.policy"
   install -Dm644 packaging/polkit/49-alienware.rules \
     "${pkgdir}/usr/share/polkit-1/rules.d/49-alienware.rules"
-
-  install -Dm644 packaging/udev/71-alienware-aw-elc.rules \
-    "${pkgdir}/usr/lib/udev/rules.d/71-alienware-aw-elc.rules"
 
   install -Dm644 README.md "${pkgdir}/usr/share/doc/${pkgname}/README.md"
 }

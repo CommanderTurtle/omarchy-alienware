@@ -1,6 +1,6 @@
 [Unit]
 Description=Alienware fan, profile and power helper
-Documentation=https://github.com/chr0nzz/omarchy-alienware
+Documentation=https://github.com/CommanderTurtle/omarchy-alienware
 After=dbus.service
 Requires=dbus.service
 
@@ -8,6 +8,7 @@ Requires=dbus.service
 Type=notify
 NotifyAccess=main
 ExecStart=/usr/bin/alienwarectl daemon
+ExecStartPre=/usr/lib/omarchy-alienware/check-controllers
 ExecStopPost=/usr/bin/alienwarectl reset-fans
 WatchdogSec=10
 Restart=on-failure
@@ -32,6 +33,9 @@ LockPersonality=yes
 SystemCallArchitectures=native
 CapabilityBoundingSet=CAP_DAC_OVERRIDE
 UMask=0077
+RuntimeDirectory=omarchy-alienware
+RuntimeDirectoryMode=0700
+ReadWritePaths=/run/omarchy-alienware
 
 [Install]
 WantedBy=multi-user.target

@@ -1,9 +1,13 @@
 name: Test
 
 on:
+  workflow_call:
   push:
     branches: [main]
   pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   model:
@@ -52,6 +56,8 @@ jobs:
         run: |
           bash -n packaging/PKGBUILD
           bash -n packaging/omarchy-alienware.install
+          bash -n scripts/install-helper.sh
+          bash -n scripts/check-controllers.sh
       - name: xml
         run: |
           python3 - <<'PY'
@@ -65,6 +71,23 @@ jobs:
           PY
       - name: manifest
         run: node -e "JSON.parse(require('fs').readFileSync('manifest.json','utf8'))"
+
+  native:
+    name: Native SDK bridge (no hardware)
+    runs-on: ubuntu-latest
+    container: archlinux:base
+    steps:
+      - name: Build dependencies
+        run: pacman -Syu --noconfirm --needed base-devel cmake ninja git python pkgconf nlohmann-json libusb hidapi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Compile pinned sources and exercise hardware-free contracts
+        run: |
+          cmake -S backend -B backend/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --build backend/build
+          ctest --test-dir backend/build --output-on-failure
+          DESTDIR=/tmp/alienware-stage cmake --install backend/build
+          test -s /tmp/alienware-stage/usr/share/omarchy-alienware/awcc/database.json
+          test -x /tmp/alienware-stage/usr/lib/omarchy-alienware/alienware-backend
 
   versions:
     name: Versions agree
@@ -89,6 +112,16 @@ jobs:
         run: |
           manifest=$(python3 -c "import json;print(json.load(open('manifest.json'))['version'])")
           test -f "release-notes/v${manifest}.md"
+      - name: native version agrees
+        run: |
+          python3 - <<'PY'
+          import json, pathlib, re
+          version = json.loads(pathlib.Path('manifest.json').read_text())['version']
+          cmake = pathlib.Path('backend/CMakeLists.txt').read_text()
+          main = pathlib.Path('backend/main.cpp').read_text()
+          assert re.search(r'project\(alienware_backend VERSION ' + re.escape(version) + r' ', cmake)
+          assert '{"backend", "' + version + '"}' in main
+          PY
 
   style:
     name: House rules

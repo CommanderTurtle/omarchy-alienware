@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/chr0nzz/omarchy-alienware/helper/internal/backend"
 )
 
 const (
@@ -21,13 +23,15 @@ const (
 )
 
 type Fan struct {
-	ID      string `json:"id"`
-	Index   int    `json:"index"`
-	Label   string `json:"label"`
-	RPM     int    `json:"rpm"`
-	Max     int    `json:"max"`
-	Boost   int    `json:"boost"`
-	Percent int    `json:"percent"`
+	Readable      *bool  `json:"readable,omitempty"`
+	BoostWritable *bool  `json:"boostWritable,omitempty"`
+	ID            string `json:"id"`
+	Index         int    `json:"index"`
+	Label         string `json:"label"`
+	RPM           int    `json:"rpm"`
+	Max           int    `json:"max"`
+	Boost         int    `json:"boost"`
+	Percent       int    `json:"percent"`
 }
 
 type Profile struct {
@@ -71,26 +75,33 @@ type CPU struct {
 }
 
 type Snapshot struct {
-	Model    string
-	Hwmon    string
-	Fans     []Fan
-	Temps    map[string]int
-	Profile  Profile
-	Turbo    Turbo
-	Power    Power
-	CPU      CPU
-	GPU      GPU
-	Warnings []string
+	BackendError error
+	Backend      BackendInfo
+	Model        string
+	Hwmon        string
+	Fans         []Fan
+	Temps        map[string]int
+	Profile      Profile
+	Turbo        Turbo
+	Power        Power
+	CPU          CPU
+	GPU          GPU
+	Warnings     []string
 }
 
 type Reader struct {
+	Backend    *backend.Client
 	Root       string
 	PPDRunning func() bool
 	RunNvidia  func() (string, error)
 }
 
 func New() *Reader {
-	return &Reader{Root: "/"}
+	r := &Reader{Root: "/"}
+	if backend.Installed() {
+		r.Backend = &backend.Client{}
+	}
+	return r
 }
 
 func (r *Reader) root() string {

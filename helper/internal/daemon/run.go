@@ -12,11 +12,16 @@ import (
 	"github.com/godbus/dbus/v5"
 	"github.com/godbus/dbus/v5/introspect"
 
+	"github.com/chr0nzz/omarchy-alienware/helper/internal/backend"
 	"github.com/chr0nzz/omarchy-alienware/helper/internal/hw"
 )
 
 const introspectXML = `<node>
   <interface name="` + Interface + `">
+    <method name="LightingRequest">
+      <arg direction="in" type="s" name="json"/>
+      <arg direction="out" type="s"/>
+    </method>
     <method name="Status">
       <arg direction="out" type="s"/>
     </method>
@@ -57,11 +62,13 @@ var ppdNames = []string{
 
 func detectPPD(conn *dbus.Conn) func() bool {
 	return func() bool {
+		check, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
 		bus := conn.BusObject()
 		for _, name := range ppdNames {
 			var owned bool
-			if err := bus.Call("org.freedesktop.DBus.NameHasOwner", 0, name).Store(&owned); err != nil {
-				continue
+			if err := bus.CallWithContext(check, "org.freedesktop.DBus.NameHasOwner", 0, name).Store(&owned); err != nil {
+				return true
 			}
 			if owned {
 				return true
@@ -76,10 +83,6 @@ func Run(reader *hw.Reader, logger *log.Logger) error {
 		logger = log.Default()
 	}
 
-	if err := reader.ResetBoost(); err != nil {
-		logger.Printf("failsafe: could not reset fan boost at startup: %v", err)
-	}
-
 	conn, err := dbus.SystemBus()
 	if err != nil {
 		return fmt.Errorf("cannot connect to the system bus: %w", err)
@@ -87,9 +90,16 @@ func Run(reader *hw.Reader, logger *log.Logger) error {
 	defer conn.Close()
 
 	reader.PPDRunning = detectPPD(conn)
+	if reader.Backend != nil {
+		reader.Backend.Conflict = backend.SystemdConflict(conn)
+	}
+	if err := reader.ResetBoost(); err != nil {
+		logger.Printf("failsafe: could not reset owned fan boost at startup: %v", err)
+	}
 	svc := NewService(reader, &polkitAuthorizer{conn: conn}, logger)
 
 	table := map[string]any{
+		"LightingRequest": svc.LightingRequest,
 		"Status":          svc.Status,
 		"SetProfile":      svc.SetProfile,
 		"SetBoost":        svc.SetBoost,

@@ -5,6 +5,7 @@ import (
 
 	"github.com/godbus/dbus/v5"
 
+	"github.com/chr0nzz/omarchy-alienware/helper/internal/backend"
 	"github.com/chr0nzz/omarchy-alienware/helper/internal/fan"
 	"github.com/chr0nzz/omarchy-alienware/helper/internal/hw"
 	"github.com/chr0nzz/omarchy-alienware/helper/internal/kbd"
@@ -53,6 +54,8 @@ func mapError(err error) *dbus.Error {
 		}
 	}
 	switch {
+	case errors.Is(err, backend.ErrBusy):
+		return dbusError(ErrNameBusy, err.Error())
 	case errors.Is(err, hw.ErrBadRequest), errors.Is(err, fan.ErrInvalidCurve):
 		return dbusError(ErrNameBadRequest, err.Error())
 	case errors.Is(err, hw.ErrNotSupported):

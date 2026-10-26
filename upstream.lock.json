@@ -1,0 +1,16 @@
+{
+  "awcc": {
+    "repository": "https://github.com/tr1xem/AWCC.git",
+    "revision": "411982d325c4f6a144dbac35059f0ab1bb4b5f00",
+    "version": "1.19.0+post-release-fixes"
+  },
+  "alienfx": {
+    "repository": "https://github.com/tr1xem/alienfx-linux.git",
+    "revision": "a16a4164d98d948cd294f3164fa5862cf08f8d12"
+  },
+  "loguru": {
+    "repository": "https://github.com/emilk/loguru.git",
+    "revision": "9c2fea0d4530657f23259be4132f8101c98b579e",
+    "version": "2.1.0"
+  }
+}

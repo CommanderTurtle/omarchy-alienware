@@ -45,6 +45,9 @@ func (r *Reader) boostPath(hwmon string, index int) string {
 }
 
 func (r *Reader) SetBoost(id string, value int) error {
+	if r.Backend != nil {
+		return r.backendWrite("boost", map[string]any{"fan": id, "value": value})
+	}
 	index, err := fanIndex(id)
 	if err != nil {
 		return err
@@ -64,6 +67,9 @@ func (r *Reader) SetBoost(id string, value int) error {
 }
 
 func (r *Reader) ResetBoost() error {
+	if r.Backend != nil {
+		return r.backendWrite("reset", map[string]any{})
+	}
 	hwmon, err := r.FindHwmon(AlienwareHwmonName)
 	if err != nil {
 		return fmt.Errorf("%w: %s", ErrHardwareMissing, err.Error())
@@ -78,6 +84,9 @@ func (r *Reader) ResetBoost() error {
 }
 
 func (r *Reader) SetProfile(name string) error {
+	if r.Backend != nil {
+		return r.backendWrite("profile", map[string]any{"name": name})
+	}
 	if name == "" {
 		return fmt.Errorf("%w: empty profile name", ErrBadRequest)
 	}
@@ -102,13 +111,13 @@ func (r *Reader) SetProfile(name string) error {
 }
 
 func (r *Reader) SetTurbo(on bool) error {
+	path, inverted := r.turboPath()
 	value := "1"
-	if on {
+	if on == inverted {
 		value = "0"
 	}
-	path := r.noTurboPath()
 	if _, err := readInt(path); err != nil {
-		return fmt.Errorf("%w: intel_pstate no_turbo not present", ErrNotSupported)
+		return fmt.Errorf("%w: CPU turbo control not present", ErrNotSupported)
 	}
 	if err := writeSysfs(path, value); err != nil {
 		return classifyWrite(path, err)

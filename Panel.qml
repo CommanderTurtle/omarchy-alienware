@@ -469,7 +469,7 @@ Panel {
     if (tab === "rgb") {
       var rgbParts = ["h/l tab"]
       if (kbdPresent) rgbParts.push("H/L surface")
-      if (rgbSubTabEffective === "chassis") { rgbParts.push("j/k region", "space select", "a/x regions", "i identify") }
+      if (rgbSubTabEffective === "chassis" && service && service.mappedChassis) { rgbParts.push("j/k region", "space select", "a/x regions") }
       else { rgbParts.push("click/drag keys", "K/X keys") }
       rgbParts.push("p on/off", "c colour", "t theme", "b battery", "esc")
       return rgbParts.join(" · ")
@@ -477,7 +477,7 @@ Panel {
     return "h/l tab · p mode · 1-4 mode · j/k field · +/- adjust · t turbo · esc"
   }
 
-  readonly property string editorFocusBlock: colorPicker.field.activeFocus || sPoll.activeFocus || sHot.activeFocus ? "yes" : ""
+  readonly property string editorFocusBlock: deviceColor.activeFocus || colorPicker.field.activeFocus || sPoll.activeFocus || sHot.activeFocus ? "yes" : ""
 
   function handleTextKey(t) {
     if (!service) return
@@ -515,7 +515,6 @@ Panel {
       case "o": service.toggleLights(); break
       case "H": moveRgbSubTab(-1); break
       case "L": moveRgbSubTab(1); break
-      case "i": if (rgbSubTabEffective === "chassis") { var current = regions[regionCursor]; if (current) service.identifyRegion(current.id) } break
       case "a": if (rgbSubTabEffective === "chassis") selectAllRegions(); break
       case "x": if (rgbSubTabEffective === "chassis") clearRegionSelection(); break
       case "K": if (rgbSubTabEffective === "keyboard") selectAllKeys(); break
@@ -857,36 +856,27 @@ Panel {
           spacing: Style.space(12)
           visible: root.tab === "fans" && !root.settingsOpen
 
-          Row {
+          Flow {
             id: fanCards
             width: parent.width
             spacing: Style.space(8)
             readonly property real cardWidth: (width - spacing) / 2
 
-            FanCard {
-              width: fanCards.cardWidth
-              fan: root.cpuFan
-              temp: root.cpuTemp
-              stale: root.stale
-              hotTemp: root.hotTemp
-              fg: root.fg
-              dim: root.dim
-              accent: root.accent
-              alertColor: root.urgentColor
-              fontFamily: root.fontFamily
-            }
-
-            FanCard {
-              width: fanCards.cardWidth
-              fan: root.gpuFan
-              temp: root.gpuTemp
-              stale: root.stale
-              hotTemp: root.hotTemp
-              fg: root.fg
-              dim: root.dim
-              accent: root.accent
-              alertColor: root.urgentColor
-              fontFamily: root.fontFamily
+            Repeater {
+              model: Model.toList(root.hw.fans)
+              delegate: FanCard {
+                required property var modelData
+                width: fanCards.cardWidth
+                fan: modelData
+                temp: root.hw.temps[modelData.id]
+                stale: root.stale
+                hotTemp: root.hotTemp
+                fg: root.fg
+                dim: root.dim
+                accent: root.accent
+                alertColor: root.urgentColor
+                fontFamily: root.fontFamily
+              }
             }
           }
 
@@ -985,7 +975,7 @@ Panel {
                   text: root.hw.curve.active ? "Update" : "Apply"
                   bordered: true
                   selected: true
-                  enabled: root.available
+                  enabled: root.available && root.hw.backend.curveSupported
                   foreground: root.fg
                   accent: root.accent
                   fontFamily: root.fontFamily
@@ -1039,11 +1029,53 @@ Panel {
           spacing: Style.space(12)
           visible: root.tab === "rgb" && !root.settingsOpen
 
+          Card {
+            CardTitle { title: "ALIENFX DEVICES"; detail: "Detected by the SDK" }
+            Text {
+              width: parent.width
+              wrapMode: Text.Wrap
+              text: "Only verified light IDs in backend.json can be changed. Discovery does not change brightness or save to firmware."
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+            TextField {
+              id: deviceColor
+              width: parent.width
+              placeholderText: "RRGGBB"
+              text: "8080FF"
+            }
+            Repeater {
+              model: root.service ? root.service.lightingDevices : []
+              delegate: Row {
+                required property var modelData
+                width: parent.width
+                spacing: Style.space(8)
+                Text {
+                  width: parent.width - deviceApply.implicitWidth - Style.space(8)
+                  textFormat: Text.PlainText
+                  text: modelData.name + " · " + modelData.id + " · interface " + modelData.interface + " · API " + modelData.api + (modelData.ambiguous ? " · select an interface in backend.json" : modelData.mapped ? "" : " · not mapped")
+                  wrapMode: Text.Wrap
+                  color: root.fg
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
+                Button {
+                  id: deviceApply
+                  text: "Apply"
+                  enabled: modelData.mapped && Model.validHex(deviceColor.text)
+                  foreground: root.fg
+                  onClicked: root.service.setDeviceColor(modelData.id, deviceColor.text)
+                }
+              }
+            }
+          }
+
           Text {
             width: parent.width
             wrapMode: Text.Wrap
             visible: !root.rgbConnected
-            text: "󰀦  " + (root.rgbError !== "" ? root.rgbError : "Waiting for the lighting controller")
+            text: "󰀦  " + (root.rgbError !== "" ? root.rgbError : root.service && root.service.lightingDevices.length ? "Configure verified light IDs in backend.json" : "No supported lighting controller detected")
             color: root.urgentColor
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall
@@ -1082,7 +1114,7 @@ Panel {
                 title: "Battery on ⏻"
                 detail: root.service && root.service.batterySync ? root.batteryLine : "Power button is yours"
                 checked: root.service ? root.service.batterySync : true
-                enabled: root.rgbConnected
+                enabled: root.service && root.service.mappedChassis
                 onToggled: if (root.service) root.service.toggleBatterySync()
               }
             }
@@ -1095,7 +1127,7 @@ Panel {
               from: 0
               to: 100
               stepSize: 5
-              editable: root.rgbConnected
+              editable: root.rgbConnected && root.rgb.device.brightnessSupported
               fg: root.fg
               dim: root.dim
               fontFamily: root.fontFamily
@@ -1105,7 +1137,8 @@ Panel {
 
           Item {
             width: parent.width
-            implicitHeight: Math.max(surfaceGroup.implicitHeight, surfaceActions.implicitHeight)
+            visible: root.kbdPresent || (root.service && root.service.mappedChassis)
+            implicitHeight: visible ? Math.max(surfaceGroup.implicitHeight, surfaceActions.implicitHeight) : 0
 
             ButtonGroup {
               id: surfaceGroup
@@ -1208,7 +1241,7 @@ Panel {
 
           RegionMap {
             width: parent.width
-            visible: root.rgbSubTabEffective === "chassis"
+            visible: root.rgbSubTabEffective === "chassis" && root.service && root.service.mappedChassis
             regions: root.regions
             swatches: root.regionSwatchMap
             poweredMap: root.regionPoweredMap
@@ -1229,6 +1262,7 @@ Panel {
 
           ColorPicker {
             id: colorPicker
+            visible: root.kbdPresent || (root.service && root.service.mappedChassis)
             width: parent.width
             hex: root.pickedHex
             swatches: root.service ? root.service.themeSwatches : []

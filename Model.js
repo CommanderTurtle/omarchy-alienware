@@ -276,8 +276,9 @@ function normalizeFan(raw, index) {
     rpm: Math.max(0, rpm),
     max: Math.max(0, max),
     boost: clampBoost(src.boost),
+    readable: src.readable !== false,
     percent: percent,
-    stopped: rpm === 0
+    stopped: src.readable !== false && rpm === 0
   }
 }
 
@@ -375,7 +376,7 @@ function normalizeStatus(raw) {
   var src = isObject(raw) ? raw : {}
   var fanList = toList(src.fans)
   var fans = []
-  for (var i = 0; i < fanList.length && fans.length < 2; i++) fans.push(normalizeFan(fanList[i], fans.length))
+  for (var i = 0; i < fanList.length && fans.length < 32; i++) fans.push(normalizeFan(fanList[i], fans.length))
   var warnings = []
   var warnList = toList(src.warnings)
   for (var w = 0; w < warnList.length; w++) {
@@ -387,6 +388,11 @@ function normalizeStatus(raw) {
     ts: toInt(src.ts, 0),
     model: String(src.model || ""),
     hwmon: String(src.hwmon || ""),
+    backend: {
+      name: isObject(src.backend) ? String(src.backend.name || "") : "",
+      curveSupported: isObject(src.backend) ? src.backend.curveSupported === true : false,
+      supportedModel: isObject(src.backend) ? src.backend.supportedModel === true : false
+    },
     fans: fans,
     temps: normalizeTemps(src.temps),
     profile: normalizeProfile(src.profile),
@@ -418,15 +424,19 @@ function fansStopped(status) {
   if (!status) return false
   var fans = toList(status.fans)
   if (!fans.length) return false
-  for (var i = 0; i < fans.length; i++) if (!fans[i] || fans[i].rpm !== 0) return false
+  for (var i = 0; i < fans.length; i++) if (!fans[i] || fans[i].readable === false || fans[i].rpm !== 0) return false
   return true
 }
 
 function maxRpm(status) {
   var fans = toList(status ? status.fans : null)
   var best = 0
-  for (var i = 0; i < fans.length; i++) if (fans[i] && fans[i].rpm > best) best = fans[i].rpm
-  return best
+  var readable = false
+  for (var i = 0; i < fans.length; i++) if (fans[i] && fans[i].readable !== false) {
+    readable = true
+    if (fans[i].rpm > best) best = fans[i].rpm
+  }
+  return readable ? best : NaN
 }
 
 function hottest(status) {
@@ -494,7 +504,7 @@ function profileGlyph(name) {
 function profileChoices(status) {
   var list = status && status.profile ? toList(status.profile.choices) : []
   if (list.length) return list
-  return PROFILE_ORDER.slice()
+  return []
 }
 
 function nextProfile(choices, current, direction) {
@@ -934,6 +944,19 @@ function regionIds() {
   return out
 }
 
+function hasLegacyChassis(devices) {
+  var found = {}
+  var list = toList(devices)
+  for (var i = 0; i < list.length; i++) {
+    if (list[i].mapped !== true) continue
+    var regions = isObject(list[i].regions) ? list[i].regions : {}
+    for (var id in regions) found[id] = true
+  }
+  var required = regionIds()
+  for (var r = 0; r < required.length; r++) if (!found[required[r]]) return false
+  return true
+}
+
 function regionById(id) {
   var want = String(id || "")
   for (var i = 0; i < REGIONS.length; i++) if (REGIONS[i].id === want) return REGIONS[i]
@@ -981,11 +1004,13 @@ function normalizeRgbStatus(raw) {
   return {
     ok: src.ok !== false,
     backend: String(src.backend || ""),
+    devices: toList(src.devices),
     device: {
       path: String(dev.path || ""),
       vendorId: String(dev.vendorId || ""),
       productId: String(dev.productId || ""),
-      ready: dev.ready === true
+      ready: dev.ready === true,
+      brightnessSupported: dev.brightnessSupported === true
     },
     regions: normalizeRegions(src.regions)
   }
@@ -1246,6 +1271,7 @@ function statusHealth(hasStatus, lastResult, stale) {
     if (lastResult && lastResult.ok === false) return "error"
     return "missing"
   }
+  if (lastResult && lastResult.ok === false && lastResult.code === "device-busy") return "stale"
   if (lastResult && lastResult.ok === false) return "error"
   if (stale === true) return "stale"
   return "ok"
@@ -1362,7 +1388,8 @@ function barView(status, health, items, hot) {
     } else if (id === "gpu") {
       segments.push({ id: id, glyph: barItemGlyph("gpu"), text: isFinite(gpuTemp) ? formatTemp(gpuTemp, false) : "off", alert: gpuHot })
     } else if (id === "fan") {
-      segments.push({ id: id, glyph: barItemGlyph("fan"), text: formatRpmShort(stopped ? 0 : maxRpm(status)), alert: false })
+      var rpm = stopped ? 0 : maxRpm(status)
+      segments.push({ id: id, glyph: barItemGlyph("fan"), text: isFinite(rpm) ? formatRpmShort(rpm) : "-", alert: false })
     } else if (id === "gpuPower") {
       var gpu = status && status.gpu ? status.gpu : null
       var draw = gpu && gpu.available ? toNumber(gpu.draw, NaN) : NaN
@@ -1387,7 +1414,7 @@ function barTooltip(status, health, lastResult) {
   for (var i = 0; i < fans.length; i++) {
     var f = fans[i]
     if (!f) continue
-    parts.push(f.label + " " + formatRpm(f.rpm))
+    parts.push(f.label + " " + (f.readable === false ? "RPM not reported" : formatRpm(f.rpm)))
   }
   if (typeof status.temps.cpu === "number") parts.push("CPU " + formatTemp(status.temps.cpu, true))
   if (typeof status.temps.gpu === "number") parts.push("GPU " + formatTemp(status.temps.gpu, true))
@@ -1396,11 +1423,27 @@ function barTooltip(status, health, lastResult) {
   return parts.join(" · ")
 }
 
+function deviceColorPayload(raw) {
+  var out = {}
+  if (!isObject(raw)) return out
+  for (var id in raw) {
+    var hex = normalizeHex(raw[id])
+    if (/^[0-9a-f]{4}:[0-9a-f]{4}$/.test(id) && hex) out[id] = hex
+  }
+  return out
+}
+
+function hasLightingState(state) {
+  return !!state && (hasAnyKey(state.devices) || hasAnyKey(state.regions) || hasAnyKey(state.keys) ||
+    !!state.color || state.lightsOn === false || state.themeSync === true || state.batterySync === true || state.brightness < 100)
+}
+
 function parseState(raw) {
   var parsed = parseJson(raw)
   var src = isObject(parsed) ? parsed : {}
   return {
     version: toInt(src.version, 1),
+    devices: deviceColorPayload(src.devices),
     regions: regionColorPayload(src.regions),
     regionsOn: normalizeRegionOnMap(src.regionsOn),
     keys: normalizeKeyColorMap(src.keys),
@@ -1409,7 +1452,7 @@ function parseState(raw) {
     brightness: src.brightness === undefined || src.brightness === null ? 100 : clampBrightness(src.brightness),
     lightsOn: src.lightsOn !== false,
     themeSync: src.themeSync === true,
-    batterySync: src.batterySync !== false,
+    batterySync: src.batterySync === true,
     curve: {
       interval: clampInterval(src.curve && src.curve.interval),
       hysteresis: clampHysteresis(src.curve && src.curve.hysteresis),
@@ -1424,6 +1467,7 @@ function buildStatePayload(state) {
   return {
     version: 2,
     savedAt: toInt(src.savedAt, 0),
+    devices: deviceColorPayload(src.devices),
     regions: regionColorPayload(src.regions),
     regionsOn: normalizeRegionOnMap(src.regionsOn),
     keys: normalizeKeyColorMap(src.keys),
@@ -1432,7 +1476,7 @@ function buildStatePayload(state) {
     brightness: clampBrightness(src.brightness),
     lightsOn: src.lightsOn !== false,
     themeSync: src.themeSync === true,
-    batterySync: src.batterySync !== false,
+    batterySync: src.batterySync === true,
     curve: buildCurvePayload(
       src.curve ? src.curve.interval : 2,
       src.curve ? src.curve.hysteresis : 3,

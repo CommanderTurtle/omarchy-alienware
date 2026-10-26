@@ -329,14 +329,6 @@ Item {
             anchors.rightMargin: Style.space(6)
             spacing: Style.space(4)
 
-            PanelActionButton {
-              iconText: "󱄄"
-              tooltipText: "Light this region"
-              foreground: root.fg
-              fontFamily: root.fontFamily
-              onClicked: root.identifyRequested(chip.modelData)
-            }
-
             Button {
               text: root.isPowered(chip.modelData) ? "On" : "Off"
               selected: root.isPowered(chip.modelData)

@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "xyzlab.alienware",
   "name": "Alienware",
-  "version": "0.3.6",
-  "author": "xyzlab",
+  "version": "0.4.0",
+  "author": "CommanderTurtle; original plugin by xyzlab",
   "license": "MIT",
-  "description": "Alienware Command Center replacement for the Omarchy bar. Fan readouts and an additive boost curve, thermal profiles, turbo and power limits, and chassis RGB for the power button, lid logo and ring. All hardware access goes through the alienwarectl helper.",
+  "description": "Alienware and Dell G-series controls for the Omarchy bar using pinned AWCC and AlienFan/AlienFX backends. Hardware capabilities are detected; privileged operations go through alienwarectl and Polkit.",
   "kinds": [
     "service",
     "bar-widget"
@@ -25,7 +25,8 @@
       "pollInterval": 2,
       "hotTemp": 90,
       "display": "cpu",
-      "themeRgb": false
+      "themeRgb": false,
+      "muteSync": false
     },
     "schema": [
       {
@@ -51,6 +52,12 @@
         "type": "string",
         "label": "Bar shows, comma separated: logo, mode, cpu, gpu, fan, gpuPower",
         "defaultValue": "cpu"
+      },
+      {
+        "key": "muteSync",
+        "type": "boolean",
+        "label": "Show mute state on a verified keyboard map",
+        "defaultValue": false
       },
       {
         "key": "themeRgb",

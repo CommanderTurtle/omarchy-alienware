@@ -10,6 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/godbus/dbus/v5"
+
+	"github.com/chr0nzz/omarchy-alienware/helper/internal/backend"
 	"github.com/chr0nzz/omarchy-alienware/helper/internal/client"
 	"github.com/chr0nzz/omarchy-alienware/helper/internal/daemon"
 	"github.com/chr0nzz/omarchy-alienware/helper/internal/elc"
@@ -19,7 +22,7 @@ import (
 	"github.com/chr0nzz/omarchy-alienware/helper/internal/usbreset"
 )
 
-var Version = "0.3.6"
+var Version = "0.4.0"
 
 var rgbResetter elc.Resetter = usbreset.New()
 
@@ -32,28 +35,27 @@ const Usage = `alienwarectl <verb> [args]
   daemon                            run the privileged D-Bus service
   status                            print the full status JSON
   profile <name>                    select a platform profile
-  boost <cpu|gpu> <0-255>           set an additive fan boost
+  boost <cpu|gpu|fanN> <value>     kernel additive 0-255; AWCC legacy 0-100
   curve apply <file|->              apply a fan curve from JSON
   curve stop                        stop the fan curve and reset boost
-  turbo <on|off>                    toggle Intel turbo
+  turbo <on|off>                    toggle available Intel/AMD CPU turbo
   pl <1|2|3> <watts>                set a RAPL power limit
   gpu                               print the gpu object alone
   rgb status                        print the RGB device and its regions
-  rgb set <region> <RRGGBB>         light one region: power, logo, ring-top, ring-bottom
+  rgb set <region> <RRGGBB>         light one verified configured region
   rgb set-all <RRGGBB>              light every region
   rgb set-map <region=RRGGBB,...>   light named regions in one transaction
-  rgb mode <name>                   not supported on the alienfx backend yet
   rgb brightness <0-100>            set the overall brightness
-  rgb identify <region>             blink one region red
   rgb off                           blank every region
-  rgb reset                         USB reset the AW-ELC controller
   kbd status                        print keyboard presence and key count
   kbd set-map <idx=RRGGBB,...>      light named keys in one transaction
   kbd set-all <RRGGBB>              light every key
   kbd identify <idx>                light one key white and blank the rest
   kbd off                           blank every key
-  reset-fans                        write boost 0 straight to sysfs
+  reset-fans                        reset only fan boosts owned by this helper
   version                           print the binary version
+  backend status                    list discovered AlienFX devices and mappings
+  backend color <VID:PID> <RRGGBB>   color one device's verified mapped regions
 `
 
 type Env struct {
@@ -86,13 +88,19 @@ func RunWith(env Env, args []string) int {
 		return 0
 	case "rgb":
 		return runRGB(env, args[1:])
+	case "backend":
+		return runBackend(env, args[1:])
 	}
 	return runDaemonVerb(env, args)
 }
 
 func runDaemon(env Env) int {
 	logger := log.New(env.Stderr, "", log.LstdFlags)
-	if err := daemon.Run(hw.New(), logger); err != nil {
+	reader := hw.New()
+	if reader.Backend == nil {
+		return emitError(env.Stdout, notSupported("SDK bridge missing; build and install packaging/PKGBUILD from this checkout"))
+	}
+	if err := daemon.Run(reader, logger); err != nil {
 		logger.Printf("%v", err)
 		return 1
 	}
@@ -100,7 +108,20 @@ func runDaemon(env Env) int {
 }
 
 func runResetFans(env Env) int {
-	err := hw.New().ResetBoost()
+	reader := hw.New()
+	if reader.Backend == nil {
+		return emitOK(env.Stdout, struct {
+			OK    bool `json:"ok"`
+			Reset bool `json:"reset"`
+		}{true, false})
+	}
+	conn, err := dbus.SystemBus()
+	if err != nil {
+		return emitError(env.Stdout, err)
+	}
+	defer conn.Close()
+	reader.Backend.Conflict = backend.SystemdConflict(conn)
+	err = reader.ResetBoost()
 	if err != nil && errors.Is(err, hw.ErrHardwareMissing) {
 		return emitOK(env.Stdout, struct {
 			OK    bool `json:"ok"`
@@ -157,8 +178,8 @@ func runDaemonVerb(env Env, args []string) int {
 			return emitError(env.Stdout, badRequest("boost takes a fan and a value, for example boost cpu 120"))
 		}
 		id := args[1]
-		if id != hw.FanCPU && id != hw.FanGPU {
-			return emitError(env.Stdout, badRequest("the fan must be cpu or gpu, got %q", id))
+		if !validFanID(id) {
+			return emitError(env.Stdout, badRequest("the fan must be an ID reported by status (cpu, gpu or fanN), got %q", id))
 		}
 		value, err := strconv.Atoi(args[2])
 		if err != nil || value < 0 || value > 255 {
@@ -278,30 +299,7 @@ func runCurve(env Env, c *client.Client, args []string) int {
 }
 
 func runRGB(env Env, args []string) int {
-	if len(args) == 0 {
-		return emitError(env.Stdout, badRequest("rgb takes status, set, set-all, set-map, mode, brightness, identify, reset or off"))
-	}
-	switch args[0] {
-	case "reset":
-		return runRGBReset(env)
-	case "mode":
-		return emitError(env.Stdout, notSupported("lighting effects are not implemented on the alienfx backend yet"))
-	case "status":
-		return runRGBStatus(env)
-	case "set":
-		return runRGBSet(env, args[1:])
-	case "set-all":
-		return runRGBSetAll(env, args[1:])
-	case "set-map":
-		return runRGBSetMap(env, args[1:])
-	case "brightness":
-		return runRGBBrightness(env, args[1:])
-	case "identify":
-		return runRGBIdentify(env, args[1:])
-	case "off":
-		return runRGBOff(env)
-	}
-	return emitError(env.Stdout, badRequest("unknown rgb verb %q", args[0]))
+	return runSDKRGB(env, args)
 }
 
 func openRGBSession(env Env) (*elc.Session, bool) {

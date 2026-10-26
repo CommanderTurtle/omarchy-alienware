@@ -1,0 +1,4 @@
+/database.json -text
+*.sh text eol=lf
+*.install text eol=lf
+/packaging/PKGBUILD text eol=lf

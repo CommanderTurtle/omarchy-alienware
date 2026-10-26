@@ -17,6 +17,7 @@ type CurveStatus struct {
 }
 
 type Status struct {
+	Backend  hw.BackendInfo `json:"backend"`
 	OK       bool           `json:"ok"`
 	TS       int64          `json:"ts"`
 	Model    string         `json:"model"`
@@ -49,6 +50,7 @@ func BuildStatus(snap hw.Snapshot, curve CurveStatus) Status {
 		curve.GPU = []fan.Point{}
 	}
 	return Status{
+		Backend:  snap.Backend,
 		OK:       true,
 		TS:       time.Now().Unix(),
 		Model:    snap.Model,

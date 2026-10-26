@@ -16,13 +16,13 @@ Rectangle {
   property int hotTemp: 90
   property string fontFamily: Style.font.family
 
-  readonly property bool hasFan: !!fan
+  readonly property bool hasFan: !!fan && fan.readable !== false
   readonly property int rpm: hasFan ? fan.rpm : 0
   readonly property int percent: hasFan ? fan.percent : 0
   readonly property int boost: hasFan ? fan.boost : 0
   readonly property bool stopped: hasFan && fan.rpm === 0
   readonly property bool hot: typeof temp === "number" && temp >= hotTemp
-  readonly property string title: hasFan ? fan.label : "Fan"
+  readonly property string title: fan ? fan.label : "Fan"
 
   radius: Style.space(6)
   color: Style.hoverFillFor(fg, accent)
@@ -75,7 +75,7 @@ Rectangle {
         textFormat: Text.PlainText
         anchors.left: parent.left
         anchors.verticalCenter: parent.verticalCenter
-        text: card.stopped ? "Idle, fan stopped" : Model.formatRpm(card.rpm)
+        text: !card.hasFan ? "RPM not reported" : card.stopped ? "Idle, fan stopped" : Model.formatRpm(card.rpm)
         color: card.stopped || card.stale ? card.dim : card.fg
         font.family: card.fontFamily
         font.pixelSize: Style.font.bodySmall
@@ -86,7 +86,7 @@ Rectangle {
         textFormat: Text.PlainText
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
-        text: Model.formatPercent(card.percent) + " of max"
+        text: card.hasFan && card.fan.max > 0 ? Model.formatPercent(card.percent) + " of max" : ""
         color: card.dim
         font.family: card.fontFamily
         font.pixelSize: Style.font.caption

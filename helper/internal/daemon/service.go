@@ -65,7 +65,11 @@ func (s *Service) curveStatus() CurveStatus {
 }
 
 func (s *Service) Status() (string, *dbus.Error) {
-	out, err := BuildStatus(s.reader.Snapshot(), s.curveStatus()).JSON()
+	snapshot := s.reader.Snapshot()
+	if snapshot.BackendError != nil {
+		return "", mapError(snapshot.BackendError)
+	}
+	out, err := BuildStatus(snapshot, s.curveStatus()).JSON()
 	if err != nil {
 		return "", mapError(err)
 	}
@@ -75,6 +79,11 @@ func (s *Service) Status() (string, *dbus.Error) {
 func (s *Service) SetProfile(name string, sender dbus.Sender) *dbus.Error {
 	if err := s.auth.Authorize(sender, ActionSetProfile); err != nil {
 		return mapError(err)
+	}
+	s.ctrl.Lock()
+	defer s.ctrl.Unlock()
+	if s.curveStatus().Active {
+		return dbusError(ErrNameBadRequest, "a fan curve is active, stop it before changing profiles")
 	}
 	return mapError(s.reader.SetProfile(name))
 }
@@ -86,6 +95,8 @@ func (s *Service) SetBoost(fanID string, value uint32, sender dbus.Sender) *dbus
 	if value > 255 {
 		return dbusError(ErrNameBadRequest, "boost must be 0-255")
 	}
+	s.ctrl.Lock()
+	defer s.ctrl.Unlock()
 	s.mu.Lock()
 	active := s.active
 	s.mu.Unlock()
@@ -135,6 +146,9 @@ func (s *Service) StartCurve(curve fan.Curve) error {
 }
 
 func (s *Service) startCurveLocked(curve fan.Curve) error {
+	if !s.reader.CanCurve() {
+		return hw.ErrNotSupported
+	}
 	s.stopLocked()
 
 	saved, err := s.reader.ReadProfile()
@@ -143,7 +157,7 @@ func (s *Service) startCurveLocked(curve fan.Curve) error {
 		s.logger.Printf("curve: current platform profile unreadable, will not restore one on stop")
 	}
 	if err := s.reader.SetProfile(customProfile); err != nil {
-		s.logger.Printf("curve: could not select the %s platform profile: %v", customProfile, err)
+		return err
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -189,8 +203,16 @@ func (s *Service) stopLocked() {
 		s.logger.Printf("failsafe: could not reset fan boost: %v", err)
 	}
 	if wasActive && saved != "" && saved != customProfile {
+		if s.reader.PPDRunning != nil && s.reader.PPDRunning() {
+			s.logger.Printf("curve: leaving profile restoration to power-profiles-daemon")
+			return
+		}
 		current, err := s.reader.ReadProfile()
-		if err == nil && current != customProfile {
+		if err != nil {
+			s.logger.Printf("curve: current profile unreadable, refusing to overwrite it")
+			return
+		}
+		if current != customProfile {
 			s.logger.Printf("curve: leaving the %s platform profile alone, it was changed while the curve ran", current)
 			return
 		}
