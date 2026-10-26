@@ -1,5 +1,10 @@
 # Roadmap
 
+The table below describes the original x15 R2 implementation. For this fork,
+see [AWCC backend](awcc.md): wider thermal discovery is independent of verified
+lighting maps, missing capabilities are disabled, and device access stays in
+the privileged helper. The original unprivileged chassis interface is not used.
+
 Tested on an Alienware x15 R2. Other models in the family differ, in particular the chassis zone
 ids and the keyboard index map.
 

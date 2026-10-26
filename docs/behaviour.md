@@ -1,5 +1,9 @@
 # Behaviour
 
+Historical 0.3.x behavior notes. In this fork, capability discovery gates curves
+and profiles; theme/mute/battery integration is opt-in, and only mapped lights
+are written. See [AWCC backend](awcc.md) for the current contract.
+
 How the plugin behaves around suspend, audio, thermal profiles and failure.
 
 ## Fan curves

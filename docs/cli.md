@@ -1,5 +1,10 @@
 # alienwarectl
 
+Historical 0.3.x command reference. Use `alienwarectl help` and the
+[AWCC backend guide](awcc.md) for this fork. RGB reset, mode and identify are
+not exposed; region IDs now come from the root-owned device map. AWCC legacy
+boost accepts 0-100, while the kernel boost path accepts 0-255.
+
 ```
 alienwarectl status
 alienwarectl profile balanced

@@ -1,5 +1,9 @@
 # Hardware
 
+Historical x15 R2 protocol notes from 0.3.x. The 0.4.x fork uses the privileged
+SDK bridge, not these old direct-hidraw paths or udev permissions. See
+[AWCC backend](awcc.md) for current installation, mapping and safety contracts.
+
 What the two lighting controllers are, how they are addressed, and why the keyboard stays root only.
 
 ## RGB regions
